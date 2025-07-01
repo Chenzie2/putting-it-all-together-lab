@@ -1,55 +1,73 @@
-from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import validates
 from sqlalchemy.ext.hybrid import hybrid_property
-from werkzeug.security import generate_password_hash, check_password_hash
+from sqlalchemy_serializer import SerializerMixin
 
-db = SQLAlchemy()
+from config import db, bcrypt
 
-class User(db.Model):
+
+class User(db.Model, SerializerMixin):
     __tablename__ = 'users'
 
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String, nullable=False, unique=True)
     _password_hash = db.Column(db.String, nullable=False)
-    bio = db.Column(db.String)
     image_url = db.Column(db.String)
+    bio = db.Column(db.String)
 
-    recipes = db.relationship("Recipe", backref="user", cascade="all, delete-orphan")
+    # Relationship to recipes
+    recipes = db.relationship("Recipe", back_populates="user", cascade="all, delete-orphan")
 
+    # Serialization rules
+    serialize_rules = ('-recipes.user', '-_password_hash')
+
+    # Password hashing
     @hybrid_property
     def password_hash(self):
-        raise AttributeError("Password hashes cannot be viewed.")
+        raise AttributeError("Password hashes may not be viewed.")
 
     @password_hash.setter
     def password_hash(self, password):
-        self._password_hash = generate_password_hash(password)
+        self._password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
 
     def authenticate(self, password):
-        return check_password_hash(self._password_hash, password)
+        return bcrypt.check_password_hash(self._password_hash, password)
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "username": self.username,
-            "bio": self.bio,
-            "image_url": self.image_url,
-        }
+    @validates('username')
+    def validate_username(self, key, value):
+        if not value or len(value.strip()) == 0:
+            raise ValueError("Username is required.")
+        return value
 
-class Recipe(db.Model):
+
+class Recipe(db.Model, SerializerMixin):
     __tablename__ = 'recipes'
 
     id = db.Column(db.Integer, primary_key=True)
     title = db.Column(db.String, nullable=False)
-    instructions = db.Column(db.Text, nullable=False)
+    instructions = db.Column(db.String, nullable=False)
     minutes_to_complete = db.Column(db.Integer, nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
 
+    # Relationship to user
+    user = db.relationship("User", back_populates="recipes")
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "title": self.title,
-            "instructions": self.instructions,
-            "minutes_to_complete": self.minutes_to_complete,
-            "user_id": self.user_id
-        }
+    # Serialization rules
+    serialize_rules = ('-user.recipes',)
+
+    @validates('title')
+    def validate_title(self, key, value):
+        if not value or len(value.strip()) == 0:
+            raise ValueError("Title is required.")
+        return value
+
+    @validates('instructions')
+    def validate_instructions(self, key, value):
+        if not value or len(value.strip()) < 50:
+            raise ValueError("Instructions must be at least 50 characters long.")
+        return value
+
+    @validates('minutes_to_complete')
+    def validate_minutes_to_complete(self, key, value):
+        if not isinstance(value, int) or value <= 0:
+            raise ValueError("Minutes to complete must be a positive integer.")
+        return value
